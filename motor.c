@@ -110,12 +110,17 @@ int motor_is_busy()
 }
 
 void motor_wait_idle()
-{
-  while (motor_is_busy())
-  {
-    usleep(100000);
+{ 
+  int busystate = motor_is_busy();
+  printf("motor state is %i ",busystate);
+  while (busystate)
+  { 
+    busystate = motor_is_busy();                            //technically checking this twice on first loop iteration
+    printf("motor moving, state is %i , waiting...\n", busystate);  
+    usleep(100000);   
   }
-    printf(" == moving, waiting...\n");
+  printf("freed from loop, motor state is %i ",busystate);
+      
 }
 
 void motor_steps(int xsteps, int ysteps, int stepspeed)
@@ -159,6 +164,16 @@ void show_status()
   printf("X Steps %d.\n", steps.x);
   printf("Y Steps %d.\n", steps.y);
   printf("Speed %d.\n", steps.speed);
+}
+
+int busyexposed(int stepspeed){
+  struct motor_message busy;
+  motor_status_get(&busy); // busy.status returns the step speed (found via testing) even while you call the app while another one is running, using this as an indicator of movement for now since motor_is_busy() function does not behave the same
+  if(stepspeed == busy.status){
+    	//printf("busy status is %i, and stepspeed is %i", busy.status, stepspeed);
+    	return 1;
+  }
+  return 0;
 }
 
 void JSON_status()
@@ -220,7 +235,7 @@ int main(int argc, char *argv[])
 
   fd = open("/dev/motor", 0); // T31 sources don't take into account the open mode
 
-  while ((c = getopt(argc, argv, "d:s:x:y:jiSr")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:jiSrm")) != -1)
   {
     switch (c)
     {
@@ -265,6 +280,10 @@ int main(int argc, char *argv[])
     case 'S': // status
       show_status();
       break;
+    case 'm': // expose motor busy function
+      int busycmd = busyexposed(stepspeed);
+      printf ("motor state is %i\n", busycmd);
+      break;
     default:
       printf("Invalid Argument %c\n", c);
       printf("Usage : %s\n"
@@ -275,7 +294,8 @@ int main(int argc, char *argv[])
              "\t -r reset to default pos.\n"
              "\t -j return json string xpos,ypos,status.\n"
              "\t -i return json string for all camera parameters\n"
-             "\t -S show status\n",
+             "\t -S show status\n"
+             "\t -m is motor moving?\n",
              argv[0]);
       exit(EXIT_FAILURE);
     }
