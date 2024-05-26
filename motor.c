@@ -119,7 +119,7 @@ void motor_wait_idle()
     printf("motor moving, state is %i , waiting...\n", busystate);  
     usleep(100000);   
   }
-  printf("freed from loop, motor state is %i ",busystate);
+  printf("Finished moving, motor state is %i ",busystate);
       
 }
 
@@ -282,7 +282,8 @@ int main(int argc, char *argv[])
       break;
     case 'm': // expose motor busy function
       int busycmd = busyexposed(stepspeed);
-      printf ("motor state is %i\n", busycmd);
+      //printf ("motor state is %i\n", busycmd);  // human readable, disabling as it only works for tshoot
+      return busycmd;
       break;
     default:
       printf("Invalid Argument %c\n", c);
