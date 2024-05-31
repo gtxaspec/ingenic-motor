@@ -71,7 +71,7 @@ Usage : ingenic-motor
 
 * go to mid position of X and Y (assuming max X steps 2130 and max y steps 1600):
 ```
-ingenic-motor -d t -x 1065 -y 800
+ingenic-motor -d h -x 1065 -y 800
 ```
 * go to position of begining of X and Y
 ```
