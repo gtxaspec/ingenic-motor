@@ -1,13 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h> 
 
+#include <fcntl.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+
 
 #define MOTOR_MOVE_STOP 0x0
 #define MOTOR_MOVE_RUN 0x1
@@ -80,6 +83,11 @@ struct motor_reset_data
 };
 
 int fd = -1;
+/* shared memory file descriptor for stop procedure*/
+int stop_fd;
+const int STOP_SHARED_SIZE = 1;
+const char* SHD_NAME = "STOP";
+
 
 void motor_ioctl(int cmd, void *arg)
 {
@@ -111,16 +119,23 @@ int motor_is_busy()
 
 void motor_wait_idle()
 { 
+  printf("wait idle called\n");
   int busystate = motor_is_busy();
-  printf("motor state is %i ",busystate);
   while (busystate)
   { 
     busystate = motor_is_busy();                            //technically checking this twice on first loop iteration
-    printf("motor moving, state is %i , waiting...\n", busystate);  
-    usleep(100000);   
+    printf("motor moving, state is %i , waiting...\n", busystate);
+    usleep(100000);
+    if (shm_open(SHD_NAME, O_RDONLY, 0666) == -1){
+       printf("shared memory called %s could not be open, must not exist, continue waiting for another loop\n",SHD_NAME);
+    }
+    else{
+       printf("shared memory called %s exists! stopping movement\n",SHD_NAME);
+       busystate = 0;
+    } 
   }
-  printf("Finished moving, motor state is %i ",busystate);
-      
+  int unlink = shm_unlink(SHD_NAME);
+  printf("Finished moving, motor state is %i ",busystate);     
 }
 
 void motor_steps(int xsteps, int ysteps, int stepspeed)
@@ -166,14 +181,55 @@ void show_status()
   printf("Speed %d.\n", steps.speed);
 }
 
-int busyexposed(int stepspeed){
-  struct motor_message busy;
-  motor_status_get(&busy); // busy.status returns the step speed (found via testing) even while you call the app while another one is running, using this as an indicator of movement for now since motor_is_busy() function does not behave the same
-  if(stepspeed == busy.status){
-    	//printf("busy status is %i, and stepspeed is %i", busy.status, stepspeed);
-    	return 1;
+void device_busychk(){         //should only be called after open(), halts the program inmediately
+  if (fd == -1){
+  	printf("could not get access to motor device, most likely is busy\n");
+  	exit(EXIT_FAILURE);
   }
-  return 0;
+}
+
+int create_shared(){
+
+    void* ptr;
+    printf("open on stop set\n");
+    stop_fd = shm_open(SHD_NAME, O_CREAT | O_RDONLY, 0666); // create shared memory that the wait function is reading between each sleep
+    printf("open on create shared heppened\n");
+    ftruncate(stop_fd, STOP_SHARED_SIZE);  
+    ptr = mmap(NULL, STOP_SHARED_SIZE, PROT_WRITE, MAP_SHARED, stop_fd, 0);
+    return 0;
+}
+
+int stop_set(){
+    void* ptr;
+    stop_fd = shm_open(SHD_NAME, O_CREAT | O_RDWR, 0666);    
+    if(stop_fd == -1){
+    	printf("getting fd of shared memory while failed, errno is %i\n", errno);
+    }
+    else{
+    	printf("open on stop set happened, fd is %i \n",stop_fd);
+    }
+    ftruncate(stop_fd, STOP_SHARED_SIZE);
+    ptr = mmap(NULL, STOP_SHARED_SIZE, PROT_WRITE | PROT_WRITE, MAP_SHARED, stop_fd, 0);
+    printf("shared memory called %s should be created by now\n", SHD_NAME);
+        
+}
+
+
+
+int stop_function(){
+    if (fd == -1){
+    	     stop_set();
+	     while(open("/dev/motor", 0) == -1){
+	     	printf("stop called, device is still inaccessible, move function still needs to check for stop flag, sleeping...\n");
+	     	usleep(100000);
+	     }
+	     printf("could read /dev/motor device should be free, resetting stop flag \n");
+	     int unlink = shm_unlink(SHD_NAME);
+	     
+    }
+    else{
+       printf("current instance of the motors app has control over device, nothing to stop \n");
+    }
 }
 
 void JSON_status()
@@ -224,7 +280,7 @@ void JSON_initial()
 
 int main(int argc, char *argv[])
 {
-  char direction = 's';
+  char direction = 'S';
   int stepspeed = 900;
   int xpos = 0;
   int ypos = 0;
@@ -235,14 +291,18 @@ int main(int argc, char *argv[])
 
   fd = open("/dev/motor", 0); // T31 sources don't take into account the open mode
 
+  //used for debugging
+  printf("fd is %i \n", fd);
+
   while ((c = getopt(argc, argv, "d:s:x:y:jiSrm")) != -1)
   {
     switch (c)
     {
-    case 'd':
+    case 'd':      
       direction = optarg[0];
       break;
     case 's':
+      device_busychk();
       if (atoi(optarg) > 900)
       {
         stepspeed = 900;
@@ -254,15 +314,18 @@ int main(int argc, char *argv[])
 
       break;
     case 'x':
+      device_busychk();
       xpos = atoi(optarg);
       got_x = 1;
       break;
     case 'y':
+      device_busychk();
       ypos = atoi(optarg);
       got_y = 1;
       break;
     case 'j':
       // get x and y current positions and status
+      //device_busychk();       not sure if we should allow to read the status if we dont acquire the FD, seems to partially work so allowing for now
       JSON_status();
       exit(EXIT_SUCCESS);
       break;
@@ -272,18 +335,20 @@ int main(int argc, char *argv[])
       exit(EXIT_SUCCESS);
       break;
     case 'r': // reset
+      device_busychk();
       printf(" == Reset position, please wait\n");
       struct motor_reset_data motor_reset_data;
       memset(&motor_reset_data, 0, sizeof(motor_reset_data));
       ioctl(fd, MOTOR_RESET, &motor_reset_data);
+      printf(" finished reset case\n");
       break;
     case 'S': // status
+      //device_busychk();       not sure if we should allow to read the status if we dont acquire the FD, seems to partially work so allowing for now
       show_status();
       break;
     case 'm': // expose motor busy function
-      int busycmd = busyexposed(stepspeed);
-      //printf ("motor state is %i\n", busycmd);  // human readable, disabling as it only works for tshoot
-      return busycmd;
+      device_busychk();
+      exit(EXIT_SUCCESS);
       break;
     default:
       printf("Invalid Argument %c\n", c);
@@ -304,16 +369,21 @@ int main(int argc, char *argv[])
 
   switch (direction)
   {
-  case 's': // stop
-    motor_ioctl(MOTOR_STOP, NULL);
+  case 'S': // stop for reset purposes, we assume we have control of the motor device, this case is the default
+    ioctl(fd, MOTOR_STOP, NULL);
+    break;
+  case 's': // stop for reset purposes, we assume we dont have control of the device, sow we need to create a shared memory object
+    stop_function();
     break;
 
   case 'c': // cruise
+    device_busychk();
     motor_ioctl(MOTOR_CRUISE, NULL);
     motor_wait_idle();
     break;
 
   case 'b': // go back
+    device_busychk();
     motor_status_get(&pos);
     printf("Going from X %d, Y %d...\n", pos.x, pos.y);
     motor_ioctl(MOTOR_GOBACK, NULL);
@@ -324,6 +394,7 @@ int main(int argc, char *argv[])
     break;
 
   case 'h': // set position
+    device_busychk();
     motor_status_get(&pos);
     if (got_x == 0)
       xpos = pos.x;
@@ -333,6 +404,7 @@ int main(int argc, char *argv[])
     break;
 
   case 'g': // x y steps
+    device_busychk();
     motor_steps(xpos, ypos, stepspeed);
     break;
 
@@ -347,5 +419,6 @@ int main(int argc, char *argv[])
            argv[0]);
     exit(EXIT_FAILURE);
   }
+  shm_unlink(SHD_NAME);
   return 0;
 }
