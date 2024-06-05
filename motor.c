@@ -85,13 +85,21 @@ struct motor_reset_data
 int fd = -1;
 /* shared memory file descriptor for stop procedure*/
 int stop_fd;
+int debugflag = 0;
 const int STOP_SHARED_SIZE = 1;
 const char* SHD_NAME = "STOP";
+
+void debugprint(const char * string, ... )
+{
+  if(debugflag){
+      printf(string);
+    }   
+}
 
 
 void motor_ioctl(int cmd, void *arg)
 {
-  // printf("[IOCTL] %d, %p\n", cmd, arg);
+  // debugprint("[IOCTL] %d, %p\n", cmd, arg);
   ioctl(fd, cmd, arg);
 }
 
@@ -119,23 +127,23 @@ int motor_is_busy()
 
 void motor_wait_idle()
 { 
-  printf("wait idle called\n");
+  debugprint("wait idle called\n");
   int busystate = motor_is_busy();
   while (busystate)
   { 
     busystate = motor_is_busy();                            //technically checking this twice on first loop iteration
-    printf("motor moving, state is %i , waiting...\n", busystate);
+    debugprint("motor moving, state is %i , waiting...\n", busystate);
     usleep(100000);
     if (shm_open(SHD_NAME, O_RDONLY, 0666) == -1){
-       printf("shared memory called %s could not be open, must not exist, continue waiting for another loop\n",SHD_NAME);
+       debugprint("shared memory called %s could not be open, must not exist, continue waiting for another loop\n",SHD_NAME);
     }
     else{
-       printf("shared memory called %s exists! stopping movement\n",SHD_NAME);
+       debugprint("shared memory called %s exists! stopping movement\n",SHD_NAME);
        busystate = 0;
     } 
   }
   int unlink = shm_unlink(SHD_NAME);
-  printf("Finished moving, motor state is %i ",busystate);     
+  debugprint("Finished moving, motor state is %i ",busystate);     
 }
 
 void motor_steps(int xsteps, int ysteps, int stepspeed)
@@ -144,7 +152,7 @@ void motor_steps(int xsteps, int ysteps, int stepspeed)
   steps.x = xsteps;
   steps.y = ysteps;
 
-  printf(" -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
+  debugprint(" -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
   motor_ioctl(MOTOR_SPEED, &stepspeed);
   motor_ioctl(MOTOR_MOVE, &steps);
 
@@ -159,7 +167,7 @@ void motor_set_position(int xpos, int ypos, int stepspeed)
   int deltax = xpos - msg.x;
   int deltay = ypos - msg.y;
 
-  printf(" -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
+  debugprint(" -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
   motor_steps(deltax, deltay, stepspeed);
 
   motor_wait_idle();
@@ -171,19 +179,19 @@ void show_status()
   struct motor_message steps;
 
   motor_get_maxsteps(&maxx, &maxy);
-  printf("Max X Steps %d.\n", maxx);
-  printf("Max Y Steps %d.\n", maxy);
+  debugprint("Max X Steps %d.\n", maxx);
+  debugprint("Max Y Steps %d.\n", maxy);
 
   motor_status_get(&steps);
-  printf("Status Move: %d.\n", steps.status);
-  printf("X Steps %d.\n", steps.x);
-  printf("Y Steps %d.\n", steps.y);
-  printf("Speed %d.\n", steps.speed);
+  debugprint("Status Move: %d.\n", steps.status);
+  debugprint("X Steps %d.\n", steps.x);
+  debugprint("Y Steps %d.\n", steps.y);
+  debugprint("Speed %d.\n", steps.speed);
 }
 
 void device_busychk(){         //should only be called after open(), halts the program inmediately
   if (fd == -1){
-  	printf("could not get access to motor device, most likely is busy\n");
+  	debugprint("could not get access to motor device, most likely is busy\n");
   	exit(EXIT_FAILURE);
   }
 }
@@ -191,9 +199,9 @@ void device_busychk(){         //should only be called after open(), halts the p
 int create_shared(){
 
     void* ptr;
-    printf("open on stop set\n");
+    debugprint("open on stop set\n");
     stop_fd = shm_open(SHD_NAME, O_CREAT | O_RDONLY, 0666); // create shared memory that the wait function is reading between each sleep
-    printf("open on create shared heppened\n");
+    debugprint("open on create shared heppened\n");
     ftruncate(stop_fd, STOP_SHARED_SIZE);  
     ptr = mmap(NULL, STOP_SHARED_SIZE, PROT_WRITE, MAP_SHARED, stop_fd, 0);
     return 0;
@@ -203,16 +211,18 @@ int stop_set(){
     void* ptr;
     stop_fd = shm_open(SHD_NAME, O_CREAT | O_RDWR, 0666);    
     if(stop_fd == -1){
-    	printf("getting fd of shared memory while failed, errno is %i\n", errno);
+    	debugprint("getting fd of shared memory while failed, errno is %i\n", errno);
     }
     else{
-    	printf("open on stop set happened, fd is %i \n",stop_fd);
+    	debugprint("open on stop set happened, fd is %i \n",stop_fd);
     }
     ftruncate(stop_fd, STOP_SHARED_SIZE);
     ptr = mmap(NULL, STOP_SHARED_SIZE, PROT_WRITE | PROT_WRITE, MAP_SHARED, stop_fd, 0);
-    printf("shared memory called %s should be created by now\n", SHD_NAME);
+    debugprint("shared memory called %s should be created by now\n", SHD_NAME);
         
 }
+
+
 
 
 
@@ -220,15 +230,15 @@ int stop_function(){
     if (fd == -1){
     	     stop_set();
 	     while(open("/dev/motor", 0) == -1){
-	     	printf("stop called, device is still inaccessible, move function still needs to check for stop flag, sleeping...\n");
+	     	debugprint("stop called, device is still inaccessible, move function still needs to check for stop flag, sleeping...\n");
 	     	usleep(100000);
 	     }
-	     printf("could read /dev/motor device should be free, resetting stop flag \n");
+	     debugprint("could read /dev/motor device should be free, resetting stop flag \n");
 	     int unlink = shm_unlink(SHD_NAME);
 	     
     }
     else{
-       printf("current instance of the motors app has control over device, nothing to stop \n");
+       debugprint("current instance of the motors app has control over device, nothing to stop \n");
     }
 }
 
@@ -292,12 +302,15 @@ int main(int argc, char *argv[])
   fd = open("/dev/motor", 0); // T31 sources don't take into account the open mode
 
   //used for debugging
-  printf("fd is %i \n", fd);
+  debugprint("fd is %i \n", fd);
 
-  while ((c = getopt(argc, argv, "d:s:x:y:jiSrm")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:jiSrmv")) != -1)
   {
     switch (c)
     {
+    case 'v':
+      debugflag = 1;
+      break;
     case 'd':      
       direction = optarg[0];
       break;
@@ -336,11 +349,11 @@ int main(int argc, char *argv[])
       break;
     case 'r': // reset
       device_busychk();
-      printf(" == Reset position, please wait\n");
+      debugprint(" == Reset position, please wait\n");
       struct motor_reset_data motor_reset_data;
       memset(&motor_reset_data, 0, sizeof(motor_reset_data));
       ioctl(fd, MOTOR_RESET, &motor_reset_data);
-      printf(" finished reset case\n");
+      debugprint(" finished reset case\n");
       break;
     case 'S': // status
       //device_busychk();       not sure if we should allow to read the status if we dont acquire the FD, seems to partially work so allowing for now
@@ -351,8 +364,8 @@ int main(int argc, char *argv[])
       exit(EXIT_SUCCESS);
       break;
     default:
-      printf("Invalid Argument %c\n", c);
-      printf("Usage : %s\n"
+      debugprint("Invalid Argument %c\n", c);
+      debugprint("Usage : %s\n"
              "\t -d Direction step\n"
              "\t -s Speed step (default 900)\n"
              "\t -x X position/step (default 0)\n"
@@ -361,7 +374,8 @@ int main(int argc, char *argv[])
              "\t -j return json string xpos,ypos,status.\n"
              "\t -i return json string for all camera parameters\n"
              "\t -S show status\n"
-             "\t -m is motor moving?\n",
+             "\t -m is motor moving?\n"
+             "\t -v verbose, print output to stdout for debugging\n",
              argv[0]);
       exit(EXIT_FAILURE);
     }
@@ -385,11 +399,11 @@ int main(int argc, char *argv[])
   case 'b': // go back
     device_busychk();
     motor_status_get(&pos);
-    printf("Going from X %d, Y %d...\n", pos.x, pos.y);
+    debugprint("Going from X %d, Y %d...\n", pos.x, pos.y);
     motor_ioctl(MOTOR_GOBACK, NULL);
     motor_wait_idle();
     motor_status_get(&pos);
-    printf("To X %d, Y %d...\n", pos.x, pos.y);
+    debugprint("To X %d, Y %d...\n", pos.x, pos.y);
 
     break;
 
@@ -409,8 +423,8 @@ int main(int argc, char *argv[])
     break;
 
   default:
-    printf("Invalid Direction Argument %c\n", direction);
-    printf("Usage : %s -d\n"
+    debugprint("Invalid Direction Argument %c\n", direction);
+    debugprint("Usage : %s -d\n"
            "\t s (Stop)\n"
            "\t c (Cruise)\n"
            "\t b (Go to previous position)\n"
