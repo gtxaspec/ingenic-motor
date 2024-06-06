@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,29 +110,31 @@ int motor_is_busy()
   return msg.status == MOTOR_IS_RUNNING ? 1 : 0;
 }
 
-void motor_wait_idle()
+void motor_wait_idle(bool verbose)
 {
   while (motor_is_busy())
   {
     usleep(100000);
   }
+  if (verbose)
     printf(" == moving, waiting...\n");
 }
 
-void motor_steps(int xsteps, int ysteps, int stepspeed)
+void motor_steps(int xsteps, int ysteps, int stepspeed, bool verbose)
 {
   struct motors_steps steps;
   steps.x = xsteps;
   steps.y = ysteps;
 
-  printf(" -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
+  if (verbose)
+    printf(" -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
   motor_ioctl(MOTOR_SPEED, &stepspeed);
   motor_ioctl(MOTOR_MOVE, &steps);
 
-  motor_wait_idle();
+  motor_wait_idle(verbose);
 }
 
-void motor_set_position(int xpos, int ypos, int stepspeed)
+void motor_set_position(int xpos, int ypos, int stepspeed, bool verbose)
 {
   struct motor_message msg;
   motor_status_get(&msg);
@@ -139,10 +142,11 @@ void motor_set_position(int xpos, int ypos, int stepspeed)
   int deltax = xpos - msg.x;
   int deltay = ypos - msg.y;
 
-  printf(" -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
-  motor_steps(deltax, deltay, stepspeed);
+  if (verbose)
+    printf(" -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
+  motor_steps(deltax, deltay, stepspeed, verbose);
 
-  motor_wait_idle();
+  motor_wait_idle(verbose);
 }
 
 void show_status()
@@ -178,6 +182,15 @@ void JSON_status()
   printf(",");
   printf("\"speed\":\"%d\"", steps.speed);
   printf("}");
+}
+
+void xy_pos()
+{
+  // return xpos,ypos as a string
+  struct motor_message steps;
+
+  motor_status_get(&steps);
+  printf("%d,%d", steps.x, steps.y);
 }
 
 void JSON_initial()
@@ -216,11 +229,12 @@ int main(int argc, char *argv[])
   int got_x = 0;
   int got_y = 0;
   int c;
+  bool verbose = true;
   struct motor_message pos;
 
   fd = open("/dev/motor", 0); // T31 sources don't take into account the open mode
 
-  while ((c = getopt(argc, argv, "d:s:x:y:jiSr")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:jipqSr")) != -1)
   {
     switch (c)
     {
@@ -256,6 +270,14 @@ int main(int argc, char *argv[])
       JSON_initial();
       exit(EXIT_SUCCESS);
       break;
+    case 'p':
+      // get x and y current positions
+      xy_pos();
+      exit(EXIT_SUCCESS);
+      break;
+    case 'q':
+      verbose = false;
+      break;
     case 'r': // reset
       printf(" == Reset position, please wait\n");
       struct motor_reset_data motor_reset_data;
@@ -273,8 +295,10 @@ int main(int argc, char *argv[])
              "\t -x X position/step (default 0)\n"
              "\t -y Y position/step (default 0) .\n"
              "\t -r reset to default pos.\n"
+             "\t -q quiet mode (suppresses output; ignored by -j, -i and -S)\n"
              "\t -j return json string xpos,ypos,status.\n"
              "\t -i return json string for all camera parameters\n"
+             "\t -p return xpos,ypos as a string\n"
              "\t -S show status\n",
              argv[0]);
       exit(EXIT_FAILURE);
@@ -289,16 +313,18 @@ int main(int argc, char *argv[])
 
   case 'c': // cruise
     motor_ioctl(MOTOR_CRUISE, NULL);
-    motor_wait_idle();
+    motor_wait_idle(verbose);
     break;
 
   case 'b': // go back
     motor_status_get(&pos);
-    printf("Going from X %d, Y %d...\n", pos.x, pos.y);
+    if (verbose)
+      printf("Going from X %d, Y %d...\n", pos.x, pos.y);
     motor_ioctl(MOTOR_GOBACK, NULL);
-    motor_wait_idle();
+    motor_wait_idle(verbose);
     motor_status_get(&pos);
-    printf("To X %d, Y %d...\n", pos.x, pos.y);
+    if (verbose)
+      printf("To X %d, Y %d...\n", pos.x, pos.y);
 
     break;
 
@@ -308,11 +334,11 @@ int main(int argc, char *argv[])
       xpos = pos.x;
     if (got_y == 0)
       ypos = pos.y;
-    motor_set_position(xpos, ypos, stepspeed);
+    motor_set_position(xpos, ypos, stepspeed, verbose);
     break;
 
   case 'g': // x y steps
-    motor_steps(xpos, ypos, stepspeed);
+    motor_steps(xpos, ypos, stepspeed, verbose);
     break;
 
   default:
