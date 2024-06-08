@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -81,6 +82,18 @@ struct motor_reset_data
 };
 
 int fd = -1;
+bool debugflag = false;
+/* shared memory file descriptor for stop procedure*/
+int stop_fd;
+const int STOP_SHARED_SIZE = 1;
+const char* SHD_NAME = "STOP";
+
+void debugprintf(const char * string, ... )
+{
+  if(debugflag){
+      printf(string);
+    }   
+}
 
 void motor_ioctl(int cmd, void *arg)
 {
@@ -110,31 +123,87 @@ int motor_is_busy()
   return msg.status == MOTOR_IS_RUNNING ? 1 : 0;
 }
 
-void motor_wait_idle(bool verbose)
-{
-  while (motor_is_busy())
-  {
+void motor_wait_idle()
+{ 
+  int busystate=motor_is_busy();
+  while (busystate)
+  { 
+    busystate = motor_is_busy();
+    debugprintf("motor moving, state is %i , waiting...\n", busystate);
     usleep(100000);
+    //check if shared memory object created by a stop call exists
+    if (shm_open(SHD_NAME, O_RDONLY, 0666) == -1){
+       debugprintf("shared memory called %s could not be open, must not exist, continue waiting for another loop\n",SHD_NAME);
+    }
+    else{
+       debugprintf("shared memory called %s exists! stopping movement\n",SHD_NAME);
+       busystate = 0;
+    } 
   }
-  if (verbose)
-    printf(" == moving, waiting...\n");
+  int unlink = shm_unlink(SHD_NAME); //necesary for object to be completely destroyed and not to trigger stop next time a movement is requested
+  //TODO actually write to and read from the memory object so we dont have to create/delete it everytime we want to move
+  debugprintf("Finished moving, motor state is %i ",busystate);  
+    
 }
 
-void motor_steps(int xsteps, int ysteps, int stepspeed, bool verbose)
+void motor_steps(int xsteps, int ysteps, int stepspeed)
 {
   struct motors_steps steps;
   steps.x = xsteps;
   steps.y = ysteps;
 
-  if (verbose)
-    printf(" -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
+  
+  debugprintf(" -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
   motor_ioctl(MOTOR_SPEED, &stepspeed);
   motor_ioctl(MOTOR_MOVE, &steps);
 
-  motor_wait_idle(verbose);
+  motor_wait_idle();
 }
 
-void motor_set_position(int xpos, int ypos, int stepspeed, bool verbose)
+void device_busychk(){         //should only be called after /dev/motor open(), checks the if we could acquire the file descriptor, if not halts the program inmediately
+  if (fd == -1){
+  	debugprintf("could not get access to motor device, most likely is busy\n");
+  	exit(EXIT_FAILURE);
+    }
+}
+
+
+int stop_set(){
+    //create a shared memory object 
+    void* ptr;
+    stop_fd = shm_open(SHD_NAME, O_CREAT | O_RDWR, 0666);    
+    if(stop_fd == -1){
+    	debugprintf("getting fd of shared memory while failed, errno is %i motors most likely wont stop!\n", errno);
+    }
+    else{
+    	debugprintf("open on stop set happened, fd is %i \n",stop_fd);
+    }
+    ftruncate(stop_fd, STOP_SHARED_SIZE);
+    ptr = mmap(NULL, STOP_SHARED_SIZE, PROT_WRITE | PROT_WRITE, MAP_SHARED, stop_fd, 0);
+    debugprintf("shared memory called %s should be created by now\n", SHD_NAME);
+
+}
+
+
+int stop_function(){
+    if (fd == -1){
+    	 stop_set(); //stop_set creates a shared memory object we use as a flag to tell another instance we are requesting to stop
+            
+	     while(open("/dev/motor", 0) == -1){
+	     	debugprintf("stop called, device is still inaccessible, move function still needs to check for stop flag, sleeping...\n");
+	     	usleep(100000);
+	     }
+	     debugprintf("could read /dev/motor device should be free, resetting stop flag \n");
+	     int unlink = shm_unlink(SHD_NAME);
+
+    }
+    else{
+       printf("current instance of the motors app has control over device, nothing to stop\n");
+    }
+}
+
+
+void motor_set_position(int xpos, int ypos, int stepspeed)
 {
   struct motor_message msg;
   motor_status_get(&msg);
@@ -142,11 +211,11 @@ void motor_set_position(int xpos, int ypos, int stepspeed, bool verbose)
   int deltax = xpos - msg.x;
   int deltay = ypos - msg.y;
 
-  if (verbose)
-    printf(" -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
-  motor_steps(deltax, deltay, stepspeed, verbose);
+  
+  debugprintf(" -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
+  motor_steps(deltax, deltay, stepspeed);
 
-  motor_wait_idle(verbose);
+  motor_wait_idle();
 }
 
 void show_status()
@@ -229,12 +298,13 @@ int main(int argc, char *argv[])
   int got_x = 0;
   int got_y = 0;
   int c;
-  bool verbose = true;
+  
   struct motor_message pos;
 
   fd = open("/dev/motor", 0); // T31 sources don't take into account the open mode
+  debugprintf("fd for /dev/motor is %i \n", fd);  
 
-  while ((c = getopt(argc, argv, "d:s:x:y:jipqSr")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:b:jipSrv")) != -1)
   {
     switch (c)
     {
@@ -242,6 +312,7 @@ int main(int argc, char *argv[])
       direction = optarg[0];
       break;
     case 's':
+      device_busychk();
       if (atoi(optarg) > 900)
       {
         stepspeed = 900;
@@ -253,10 +324,12 @@ int main(int argc, char *argv[])
 
       break;
     case 'x':
+      device_busychk();
       xpos = atoi(optarg);
       got_x = 1;
       break;
     case 'y':
+      device_busychk();
       ypos = atoi(optarg);
       got_y = 1;
       break;
@@ -275,17 +348,23 @@ int main(int argc, char *argv[])
       xy_pos();
       exit(EXIT_SUCCESS);
       break;
-    case 'q':
-      verbose = false;
+    case 'v':
+      debugflag = true;
       break;
     case 'r': // reset
-      printf(" == Reset position, please wait\n");
+      device_busychk();
+      debugprintf(" == Reset position, please wait\n");
       struct motor_reset_data motor_reset_data;
       memset(&motor_reset_data, 0, sizeof(motor_reset_data));
       ioctl(fd, MOTOR_RESET, &motor_reset_data);
       break;
     case 'S': // status
       show_status();
+      break;
+    case 'b': // is moving?
+      //program exits with failure (1) if motors are moving and with success (0) if they are not currently doesnt print anything, will adjuts if needed
+      device_busychk();
+      exit(EXIT_SUCCESS);
       break;
     default:
       printf("Invalid Argument %c\n", c);
@@ -295,10 +374,11 @@ int main(int argc, char *argv[])
              "\t -x X position/step (default 0)\n"
              "\t -y Y position/step (default 0) .\n"
              "\t -r reset to default pos.\n"
-             "\t -q quiet mode (suppresses output; ignored by -j, -i and -S)\n"
+             "\t -v verbose mode, prints debugging information while app is running\n"
              "\t -j return json string xpos,ypos,status.\n"
              "\t -i return json string for all camera parameters\n"
              "\t -p return xpos,ypos as a string\n"
+             "\t -b exits program with 1 if motor is (b)usy moving or 0 if is not (no printable output)\n" //...yet, can add it if needed by onvif
              "\t -S show status\n",
              argv[0]);
       exit(EXIT_FAILURE);
@@ -308,24 +388,28 @@ int main(int argc, char *argv[])
   switch (direction)
   {
   case 's': // stop
-    motor_ioctl(MOTOR_STOP, NULL);
+    if(fd == -1){ 
+        //current instance doesnt have control of motor device, need to set flag requesting to do it
+        stop_function();
+    }
+    else{
+        //we have control of motor device, usually when reset is called
+        motor_ioctl(MOTOR_STOP, NULL);
+    }
     break;
 
   case 'c': // cruise
     motor_ioctl(MOTOR_CRUISE, NULL);
-    motor_wait_idle(verbose);
+    motor_wait_idle();
     break;
 
   case 'b': // go back
     motor_status_get(&pos);
-    if (verbose)
-      printf("Going from X %d, Y %d...\n", pos.x, pos.y);
+    debugprintf("Going from X %d, Y %d...\n", pos.x, pos.y);
     motor_ioctl(MOTOR_GOBACK, NULL);
-    motor_wait_idle(verbose);
+    motor_wait_idle();
     motor_status_get(&pos);
-    if (verbose)
-      printf("To X %d, Y %d...\n", pos.x, pos.y);
-
+    debugprintf("To X %d, Y %d...\n", pos.x, pos.y);
     break;
 
   case 'h': // set position
@@ -334,11 +418,11 @@ int main(int argc, char *argv[])
       xpos = pos.x;
     if (got_y == 0)
       ypos = pos.y;
-    motor_set_position(xpos, ypos, stepspeed, verbose);
+    motor_set_position(xpos, ypos, stepspeed);
     break;
 
   case 'g': // x y steps
-    motor_steps(xpos, ypos, stepspeed, verbose);
+    motor_steps(xpos, ypos, stepspeed);
     break;
 
   default:
