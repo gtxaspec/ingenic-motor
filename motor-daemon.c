@@ -45,18 +45,15 @@ enum motor_status
 };
 
 struct request{
-    char command; // d,r,s,p,b (move, reset,set speed,get position, is busy)
-    char type;   // g,h,c (absolute,relative,cruise,stop)
+    char command; // d,r,s,p,b,S,i,j (move, reset,set speed,get position, is busy,Status,initial,JSON)
+    char type;   // g,h,c,s (absolute,relative,cruise,stop)
     int x;
     int got_x;
     int y;
     int got_y;
 };
 
-struct response_position{
-    int x;     //for -p and other status commands
-    int y;    
-};
+
 
 struct motor_status_st
 {
@@ -152,9 +149,6 @@ void motor_set_position(int xpos, int ypos, int stepspeed)
   motor_steps(deltax, deltay, stepspeed); 
 }
 
-
-
-
 static void daemonsetup()
 {
     pid_t pid;
@@ -226,7 +220,7 @@ int main()
     //struct instances
     struct sockaddr_un addr; //socket struct
     struct motor_reset_data motor_reset_data;
-    struct motor_message pos;
+    struct motor_message motor_message;
 
     //acquire control of motor device and perform a reset
     motorfd = open("/dev/motor", 0);
@@ -276,29 +270,35 @@ int main()
     {   
         //make request object go back to initial value
         requestcleanup();
-        syslog(LOG_NOTICE,"Waiting to accept a connection");
+        //syslog(LOG_NOTICE,"Waiting to accept a connection");
         //blocking code, wait for a connection
         int clientfd = accept(serverfd, NULL, NULL);
-        syslog(LOG_NOTICE,"Accepting a connection\n");
+        //syslog(LOG_NOTICE,"Accepting a connection\n");
 
         //load the message onto the reques_message struct
         if(read(clientfd,&request_message,sizeof(struct request)) == -1){
-            syslog (LOG_NOTICE, "Could not read message from motors app, ignore request");
+            //syslog (LOG_NOTICE, "Could not read message from motors app, ignore request");
         }
         else{
+            syslog (LOG_NOTICE, "request command is %c",request_message.command);
             switch(request_message.command){
                 case 'd': // move direction
+                    //syslog (LOG_NOTICE, "request type is %c",request_message.type);
                     switch(request_message.type){
                     case 'g': //relative movement
                         motor_steps(request_message.x, request_message.y, stepspeed);
+                        //syslog (LOG_NOTICE, "request x is %i",request_message.x);
+                        //syslog (LOG_NOTICE, "request y is %i",request_message.y);
                         break;
                     case 'h': // absolute movement
-                            motor_status_get(&pos);
+                            motor_status_get(&motor_message);
                             if (request_message.got_x == 0)
-                              request_message.x = pos.x; //as we are rewriting initial between requests this should not be necessary but leaving as is as to not break anything
+                              request_message.x = motor_message.x; //as we are rewriting initial between requests this should not be necessary but leaving as is as to not break anything
                             if (request_message.got_y == 0)
-                              request_message.y = pos.y;
+                              request_message.y = motor_message.y;
                             motor_set_position(request_message.x, request_message.y, stepspeed);
+                            //syslog (LOG_NOTICE, "request x is %i",request_message.x);
+                            //syslog (LOG_NOTICE, "request y is %i",request_message.y);
                         break;
                     case 'b': // go back
                         motor_ioctl(MOTOR_GOBACK, NULL);//should we block until "go back" movement is finished?
@@ -313,23 +313,28 @@ int main()
                     }
                 break;
                 case 'r': //reset
-                syslog (LOG_NOTICE, "executing reset...");
-                //cleanup of reset data before reset, is necesary otherwise reset is never performed even though it never fails
-                memset(&motor_reset_data, 0, sizeof(motor_reset_data));
-                int reset = ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
+                    syslog (LOG_NOTICE, "== Reset position, please wait");
+                    //cleanup of reset data before reset, is necesary otherwise reset is never performed even though it never fails
+                    memset(&motor_reset_data, 0, sizeof(motor_reset_data));
+                    ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
                 break;
                 case 'i': //get initial parameters
-                
-
+                    //This doesnt seem right, we are returning current information instead of initial parameters
+                    //not correcting for now, as we want to have functional parity
+                    motor_status_get(&motor_message);
+                    write(clientfd,&motor_message,sizeof(struct motor_message));
                 break;
                 case 'j': //get json
-
+                    motor_status_get(&motor_message);
+                    write(clientfd,&motor_message,sizeof(struct motor_message));
                 break;
                 case 'p': //get simple x y position 
-
+                    motor_status_get(&motor_message);
+                    write(clientfd,&motor_message,sizeof(struct motor_message));
                 break;
                 case 'b': //is busy
-
+                    motor_status_get(&motor_message);
+                    write(clientfd,&motor_message,sizeof(struct motor_message));
                 break;
                 case 's': //set speed
                 if (request_message.x > 900){
@@ -341,6 +346,8 @@ int main()
 
                 break;
                 case 'S': //show status
+                motor_status_get(&motor_message);
+                write(clientfd,&motor_message,sizeof(struct motor_message));
 
                 break;
 
@@ -350,13 +357,8 @@ int main()
         }
 
 
-        syslog (LOG_NOTICE, "request command is %c",request_message.command);
-        syslog (LOG_NOTICE, "request type is %c",request_message.type);
-        syslog (LOG_NOTICE, "request x is %i",request_message.x);
-        syslog (LOG_NOTICE, "request y is %i",request_message.y);
-        syslog (LOG_NOTICE, "====================");
-        motor_status_get(&pos);
-        syslog (LOG_NOTICE, "final absolute coordinates are %i,%i",pos.x,pos.y);
+        //syslog (LOG_NOTICE, "====================");
+
         //break;
     }
 
