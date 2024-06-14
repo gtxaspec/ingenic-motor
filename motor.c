@@ -124,7 +124,7 @@ int main(int argc, char *argv[])
 
   
  
-  while ((c = getopt(argc, argv, "d:s:x:y:b:jipSrv")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:jipSrvb")) != -1)
   {
     switch (c)
     {
@@ -202,9 +202,11 @@ int main(int argc, char *argv[])
       struct motor_message busy;
       read(serverfd,&busy,sizeof(struct motor_message));
       	if(busy.status == MOTOR_IS_RUNNING){
+      		printf("1\n");
       		return(1);
       	}
       	else{
+      		printf("0\n");
       		return(0);
       	}
       break;
@@ -220,7 +222,7 @@ int main(int argc, char *argv[])
              "\t -j return json string xpos,ypos,status.\n"
              "\t -i return json string for all camera parameters\n"
              "\t -p return xpos,ypos as a string\n"
-             "\t -b exits program with 1 if motor is (b)usy moving or 0 if is not (no printable output)\n" //...yet, can add it if needed by onvif
+             "\t -b prints 1 if motor is (b)usy moving or 0 if is not\n"
              "\t -S show status\n",
              argv[0]);
       exit(EXIT_FAILURE);
