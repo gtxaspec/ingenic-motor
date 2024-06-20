@@ -13,9 +13,10 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <string.h>
+#include <syslog.h>
 
 
-#define SV_SOCK_PATH "/tmp/motors"
+#define SV_SOCK_PATH "/dev/md"
 #define BUF_SIZE 15
 
 enum motor_status
@@ -101,12 +102,16 @@ int main(int argc, char *argv[])
   char direction = 's';
   int stepspeed = 900;
   int c;
+  int closeready = 0;
   struct request request_message;
   request_message.got_x = 0;
   request_message.got_y = 0;
- 
+
+  openlog ("motors app", LOG_PID, LOG_USER);
+
   //should open socket here
   struct sockaddr_un addr;
+
  
   int serverfd = socket(AF_UNIX, SOCK_STREAM, 0);
 
@@ -158,7 +163,9 @@ int main(int argc, char *argv[])
 
       struct motor_message status;
       read(serverfd,&status,sizeof(struct motor_message));
- 	  JSON_status(&status);
+
+      write(serverfd,&closeready,sizeof(closeready));
+ 	    JSON_status(&status);
       break;
     case 'i':
       // get all initial values
@@ -168,6 +175,7 @@ int main(int argc, char *argv[])
       struct motor_message initial;
       read(serverfd,&initial,sizeof(struct motor_message));
 
+      write(serverfd,&closeready,sizeof(closeready));
       JSON_initial(&initial);
       break;
     case 'p':
@@ -175,8 +183,11 @@ int main(int argc, char *argv[])
       write(serverfd,&request_message,sizeof(struct request));
       
       struct motor_message pos;
-      read(serverfd,&pos,sizeof(struct motor_message));
-
+      int load = read(serverfd,&pos,sizeof(struct motor_message));
+      syslog(LOG_DEBUG,"%i,%i,%i,%i",pos.x,pos.y,load,errno);
+      load = printf("%i,%i,%i,%i",pos.x,pos.y,load,errno);
+      syslog(LOG_DEBUG,"printf printed %i bytes and errno is %i",load,errno);
+      write(serverfd,&closeready,sizeof(closeready));
       xy_pos(&pos);
       break;
     case 'v':
@@ -193,6 +204,7 @@ int main(int argc, char *argv[])
       struct motor_message stat;
       read(serverfd,&stat,sizeof(struct motor_message));
 
+      write(serverfd,&closeready,sizeof(closeready));
       show_status(&stat);
       break;
     case 'b': // is moving?
@@ -201,6 +213,7 @@ int main(int argc, char *argv[])
       
       struct motor_message busy;
       read(serverfd,&busy,sizeof(struct motor_message));
+      write(serverfd,&closeready,sizeof(closeready));
       	if(busy.status == MOTOR_IS_RUNNING){
       		printf("1\n");
       		return(1);

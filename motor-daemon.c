@@ -15,7 +15,7 @@
 
 
 
-#define SV_SOCK_PATH "/tmp/motors"
+#define SV_SOCK_PATH "/dev/md"
 #define MAX_CONN 5
 #define MOTOR_MOVE_STOP 0x0
 #define MOTOR_MOVE_RUN 0x1
@@ -130,10 +130,11 @@ void motor_steps(int xsteps, int ysteps, int stepspeed)
   steps.x = xsteps;
   steps.y = ysteps;
 
-  
-  syslog(LOG_NOTICE," -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
+  syslog(LOG_DEBUG,"Starting relative move");
+  syslog(LOG_DEBUG," -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
   motor_ioctl(MOTOR_SPEED, &stepspeed);
   motor_ioctl(MOTOR_MOVE, &steps);
+  syslog(LOG_DEBUG,"Finished setting relative move");
 }
 
 void motor_set_position(int xpos, int ypos, int stepspeed)
@@ -144,9 +145,10 @@ void motor_set_position(int xpos, int ypos, int stepspeed)
   int deltax = xpos - msg.x;
   int deltay = ypos - msg.y;
 
-  
-  syslog(LOG_NOTICE," -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
+  syslog(LOG_DEBUG,"Starting absolute move");
+  syslog(LOG_DEBUG," -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
   motor_steps(deltax, deltay, stepspeed); 
+  syslog(LOG_DEBUG,"Finished setting absolute move");
 }
 
 static void daemonsetup()
@@ -187,9 +189,8 @@ static void daemonsetup()
     /* Set new file permissions */
     umask(0);
 
-    /* Change the working directory to the root directory */
-    /* or another appropriated directory */
-    chdir("/tmp/");
+    /* Change the working directory */
+    chdir("/dev/");
 
     /* Close all open file descriptors */
     int x;
@@ -212,11 +213,29 @@ void requestcleanup(){
     request_message.got_y = 0;
 }
 
-int main()
-{
+int main(int argc, char *argv[])
+{   
+    int c;
+    setlogmask(LOG_MASK(LOG_INFO));
+    while ((c = getopt(argc, argv, "dh")) != -1){
+        switch(c){
+            case 'd':
+            setlogmask(LOG_MASK(LOG_DEBUG)|LOG_MASK(LOG_INFO)); 
+            break;
+            default:
+                printf("Usage : \n"
+                       "\t -d enable debugging messages to syslog\n"
+                       "\t -h print this help message\n"
+                       "\t No option to start the daemon\n");
+            return EXIT_FAILURE;
+            break;
+        }
+
+    }
     daemonsetup();
     int daemonstop = 0;
     int stepspeed =900; //TODO move this value to a struct
+    int closeready = 0;
     //struct instances
     struct sockaddr_un addr; //socket struct
     struct motor_reset_data motor_reset_data;
@@ -226,13 +245,13 @@ int main()
     motorfd = open("/dev/motor", 0);
 
     //reset motor as setup
-    syslog(LOG_NOTICE,"== Reset position, please wait");
+    syslog(LOG_DEBUG,"== Reset position, please wait");
     memset(&motor_reset_data, 0, sizeof(motor_reset_data));
     ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
 
 
     int serverfd = socket(AF_UNIX, SOCK_STREAM, 0);
-    syslog(LOG_NOTICE,"Server socket fd = %d", serverfd);
+    syslog(LOG_DEBUG,"Server socket fd = %d", serverfd);
     //check if we could acquire fd for socket
     if (serverfd == -1){
         syslog (LOG_ERR, "Error initializing the socket, could not get a proper fd");
@@ -263,32 +282,41 @@ int main()
         exit(EXIT_FAILURE);
     }
 
-    syslog (LOG_NOTICE, "motors-daemon started");
+    syslog (LOG_INFO, "motors-daemon started");
 
 
     while (daemonstop == 0)
     {   
         //make request object go back to initial value
+        syslog(LOG_DEBUG,"Start request cleanup");
         requestcleanup();
-        //syslog(LOG_NOTICE,"Waiting to accept a connection");
+        //reset ok to close fd flag
+        int closeready = 0;
+        syslog(LOG_DEBUG,"Waiting to accept a connection");
         //blocking code, wait for a connection
         int clientfd = accept(serverfd, NULL, NULL);
-        //syslog(LOG_NOTICE,"Accepting a connection\n");
+        if(clientfd == -1){
+            syslog(LOG_DEBUG,"clientfd is invalid after connection accept, socket doesnt work and is %i errno : %i",clientfd,errno);
+            syslog(LOG_DEBUG,"exiting...");
+            exit(EXIT_FAILURE);
+        }
+        syslog(LOG_DEBUG,"Accepting a connection\n");
 
         //load the message onto the reques_message struct
         if(read(clientfd,&request_message,sizeof(struct request)) == -1){
-            //syslog (LOG_NOTICE, "Could not read message from motors app, ignore request");
+            syslog(LOG_DEBUG,"Could not read message from motors app, ignore request");
+            syslog(LOG_DEBUG,"client fd at this point is %i errno : %i",clientfd,errno);
         }
         else{
-            syslog (LOG_NOTICE, "request command is %c",request_message.command);
+            syslog (LOG_DEBUG, "request command is %c",request_message.command);
             switch(request_message.command){
                 case 'd': // move direction
-                    //syslog (LOG_NOTICE, "request type is %c",request_message.type);
+                    syslog (LOG_DEBUG, "request type is %c",request_message.type);
                     switch(request_message.type){
                     case 'g': //relative movement
                         motor_steps(request_message.x, request_message.y, stepspeed);
-                        //syslog (LOG_NOTICE, "request x is %i",request_message.x);
-                        //syslog (LOG_NOTICE, "request y is %i",request_message.y);
+                        syslog (LOG_DEBUG, "request x is %i",request_message.x);
+                        syslog (LOG_DEBUG, "request y is %i",request_message.y);
                         break;
                     case 'h': // absolute movement
                             motor_status_get(&motor_message);
@@ -297,8 +325,8 @@ int main()
                             if (request_message.got_y == 0)
                               request_message.y = motor_message.y;
                             motor_set_position(request_message.x, request_message.y, stepspeed);
-                            //syslog (LOG_NOTICE, "request x is %i",request_message.x);
-                            //syslog (LOG_NOTICE, "request y is %i",request_message.y);
+                            syslog (LOG_DEBUG, "request x is %i",request_message.x);
+                            syslog (LOG_DEBUG, "request y is %i",request_message.y);
                         break;
                     case 'b': // go back
                         motor_ioctl(MOTOR_GOBACK, NULL);//should we block until "go back" movement is finished?
@@ -313,7 +341,7 @@ int main()
                     }
                 break;
                 case 'r': //reset
-                    syslog (LOG_NOTICE, "== Reset position, please wait");
+                    syslog (LOG_DEBUG, "== Reset position, please wait");
                     //cleanup of reset data before reset, is necesary otherwise reset is never performed even though it never fails
                     memset(&motor_reset_data, 0, sizeof(motor_reset_data));
                     ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
@@ -322,19 +350,37 @@ int main()
                     //This doesnt seem right, we are returning current information instead of initial parameters
                     //not correcting for now, as we want to have functional parity
                     motor_status_get(&motor_message);
+                    syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
+                    //blocking code, wait for motors app to tell us we can close the fd socket, then close
+                    read(clientfd,&closeready,sizeof(closeready));
+                    //need to close fd after each request is completed
+                    close(clientfd);
+
                 break;
                 case 'j': //get json
                     motor_status_get(&motor_message);
+                    syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
+                    read(clientfd,&closeready,sizeof(closeready));
+                    //need to close fd after each request is completed
+                    close(clientfd);
                 break;
                 case 'p': //get simple x y position 
                     motor_status_get(&motor_message);
+                    syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
+                    read(clientfd,&closeready,sizeof(closeready));
+                    //need to close fd after each request is completed
+                    close(clientfd);
                 break;
                 case 'b': //is busy
                     motor_status_get(&motor_message);
+                    syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
+                    read(clientfd,&closeready,sizeof(closeready));
+                    //need to close fd after each request is completed
+                    close(clientfd);
                 break;
                 case 's': //set speed
                 if (request_message.x > 900){
@@ -348,21 +394,23 @@ int main()
                 case 'S': //show status
                 motor_status_get(&motor_message);
                 write(clientfd,&motor_message,sizeof(struct motor_message));
+                //blocking code, wait for motors app to tell us we can close the fd socket, then close
+                read(clientfd,&closeready,sizeof(closeready));
+                //need to close fd after each request is completed
+                close(clientfd);
 
                 break;
-
-                
             }
+                
 
         }
-
-
-        //syslog (LOG_NOTICE, "====================");
+       
+        syslog (LOG_DEBUG, "====================");
 
         //break;
     }
 
-    syslog (LOG_NOTICE, "motors-daemon terminated.");
+    syslog (LOG_INFO, "motors-daemon terminated.");
     closelog();
 
     return EXIT_SUCCESS;
