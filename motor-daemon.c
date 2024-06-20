@@ -38,6 +38,9 @@
 #define MOTOR_GOBACK 0x6
 #define MOTOR_CRUISE 0x7
 
+#define PID_SIZE 32
+
+
 enum motor_status
 {
   MOTOR_IS_STOP,
@@ -151,6 +154,53 @@ void motor_set_position(int xpos, int ypos, int stepspeed)
   syslog(LOG_DEBUG,"Finished setting absolute move");
 }
 
+int check_pid(char *file_name)
+{
+    FILE *f;
+    long pid;
+    char pid_buffer[PID_SIZE];
+
+    f = fopen(file_name, "r");
+    if(f == NULL)
+        return 0;
+
+    if (fgets(pid_buffer, PID_SIZE, f) == NULL) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+
+    if (sscanf(pid_buffer, "%ld", &pid) != 1) {
+        return 0;
+    }
+
+    if (kill(pid, 0) == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+int create_pid(char *file_name)
+{
+    FILE *f;
+    char pid_buffer[PID_SIZE];
+
+    f = fopen(file_name, "w");
+    if (f == NULL)
+        return -1;
+
+    memset(pid_buffer, '\0', PID_SIZE);
+    sprintf(pid_buffer, "%ld\n", (long) getpid());
+    if (fwrite(pid_buffer, strlen(pid_buffer), 1, f) != 1) {
+        fclose(f);
+        return -2;
+    }
+    fclose(f);
+
+    return 0;
+}
+
 static void daemonsetup()
 {
     pid_t pid;
@@ -213,9 +263,13 @@ void requestcleanup(){
     request_message.got_y = 0;
 }
 
+
+
 int main(int argc, char *argv[])
 {   
     int c;
+    char *pid_file;
+    pid_file = "/var/run/motors-daemon";
     setlogmask(LOG_MASK(LOG_INFO));
     while ((c = getopt(argc, argv, "dh")) != -1){
         switch(c){
@@ -233,6 +287,15 @@ int main(int argc, char *argv[])
 
     }
     daemonsetup();
+    if (check_pid(pid_file) == 1) {
+        syslog(LOG_INFO,"Motors daemon is already running.");
+        printf("Motors daemon is already running\n");
+        exit(EXIT_FAILURE);
+    }
+    if (create_pid(pid_file) < 0) {
+        syslog(LOG_INFO,"Error creating pid file %s", pid_file);
+        exit(EXIT_FAILURE);
+    }
     int daemonstop = 0;
     int stepspeed =900; //TODO move this value to a struct
     int closeready = 0;
@@ -352,35 +415,23 @@ int main(int argc, char *argv[])
                     motor_status_get(&motor_message);
                     syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
-                    //blocking code, wait for motors app to tell us we can close the fd socket, then close
-                    read(clientfd,&closeready,sizeof(closeready));
-                    //need to close fd after each request is completed
-                    close(clientfd);
-
                 break;
                 case 'j': //get json
                     motor_status_get(&motor_message);
                     syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
-                    read(clientfd,&closeready,sizeof(closeready));
-                    //need to close fd after each request is completed
-                    close(clientfd);
                 break;
                 case 'p': //get simple x y position 
                     motor_status_get(&motor_message);
                     syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
-                    read(clientfd,&closeready,sizeof(closeready));
-                    //need to close fd after each request is completed
-                    close(clientfd);
+
                 break;
                 case 'b': //is busy
                     motor_status_get(&motor_message);
                     syslog (LOG_DEBUG, "Got current status to load into command");
                     write(clientfd,&motor_message,sizeof(struct motor_message));
-                    read(clientfd,&closeready,sizeof(closeready));
-                    //need to close fd after each request is completed
-                    close(clientfd);
+
                 break;
                 case 's': //set speed
                 if (request_message.x > 900){
@@ -394,15 +445,12 @@ int main(int argc, char *argv[])
                 case 'S': //show status
                 motor_status_get(&motor_message);
                 write(clientfd,&motor_message,sizeof(struct motor_message));
-                //blocking code, wait for motors app to tell us we can close the fd socket, then close
-                read(clientfd,&closeready,sizeof(closeready));
-                //need to close fd after each request is completed
-                close(clientfd);
 
                 break;
             }
-                
 
+            //need to close fd after each request is completed
+            close(clientfd); 
         }
        
         syslog (LOG_DEBUG, "====================");
@@ -411,6 +459,7 @@ int main(int argc, char *argv[])
     }
 
     syslog (LOG_INFO, "motors-daemon terminated.");
+    unlink(pid_file);
     closelog();
 
     return EXIT_SUCCESS;

@@ -14,10 +14,13 @@
 #include <sys/un.h>
 #include <string.h>
 #include <syslog.h>
+#include <signal.h>
 
 
 #define SV_SOCK_PATH "/dev/md"
 #define BUF_SIZE 15
+
+#define PID_SIZE 32
 
 enum motor_status
 {
@@ -63,6 +66,7 @@ void JSON_initial(struct motor_message *message)
   printf(",");
   printf("\"speed\":\"%d\"", (*message).speed);
   printf("}");
+  printf("\n");
 }
 
 void JSON_status(struct motor_message *message)
@@ -79,11 +83,12 @@ void JSON_status(struct motor_message *message)
   printf(",");
   printf("\"speed\":\"%d\"", (*message).speed);
   printf("}");
+  printf("\n");
 }
 
 void xy_pos(struct motor_message *message)
 {
-  printf("%d,%d", (*message).x, (*message).y);
+  printf("%d,%d\n", (*message).x, (*message).y);
 }
 
 void show_status(struct motor_message *message)
@@ -96,19 +101,50 @@ void show_status(struct motor_message *message)
   printf("Speed %d.\n", (*message).speed);
 }
 
+int check_daemon(char *file_name)
+{
+    FILE *f;
+    long pid;
+    char pid_buffer[PID_SIZE];
+
+    f = fopen(file_name, "r");
+    if(f == NULL)
+        return 0;
+
+    if (fgets(pid_buffer, PID_SIZE, f) == NULL) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+
+    if (sscanf(pid_buffer, "%ld", &pid) != 1) {
+        return 0;
+    }
+
+    if (kill(pid, 0) == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 
 int main(int argc, char *argv[])
 {
   char direction = 's';
   int stepspeed = 900;
   int c;
-  int closeready = 0;
+  char *daemon_pid_file;
   struct request request_message;
   request_message.got_x = 0;
   request_message.got_y = 0;
 
-  openlog ("motors app", LOG_PID, LOG_USER);
-
+  //openlog ("motors app", LOG_PID, LOG_USER);
+  daemon_pid_file = "/var/run/motors-daemon";
+  if (check_daemon(daemon_pid_file) == 0) {
+        printf("Motors daemon is NOT running, please start the daemon\n");
+        exit(EXIT_FAILURE);
+    }
   //should open socket here
   struct sockaddr_un addr;
 
@@ -164,7 +200,6 @@ int main(int argc, char *argv[])
       struct motor_message status;
       read(serverfd,&status,sizeof(struct motor_message));
 
-      write(serverfd,&closeready,sizeof(closeready));
  	    JSON_status(&status);
       break;
     case 'i':
@@ -175,7 +210,7 @@ int main(int argc, char *argv[])
       struct motor_message initial;
       read(serverfd,&initial,sizeof(struct motor_message));
 
-      write(serverfd,&closeready,sizeof(closeready));
+
       JSON_initial(&initial);
       break;
     case 'p':
@@ -183,11 +218,8 @@ int main(int argc, char *argv[])
       write(serverfd,&request_message,sizeof(struct request));
       
       struct motor_message pos;
-      int load = read(serverfd,&pos,sizeof(struct motor_message));
-      syslog(LOG_DEBUG,"%i,%i,%i,%i",pos.x,pos.y,load,errno);
-      load = printf("%i,%i,%i,%i",pos.x,pos.y,load,errno);
-      syslog(LOG_DEBUG,"printf printed %i bytes and errno is %i",load,errno);
-      write(serverfd,&closeready,sizeof(closeready));
+      read(serverfd,&pos,sizeof(struct motor_message));
+
       xy_pos(&pos);
       break;
     case 'v':
@@ -204,7 +236,7 @@ int main(int argc, char *argv[])
       struct motor_message stat;
       read(serverfd,&stat,sizeof(struct motor_message));
 
-      write(serverfd,&closeready,sizeof(closeready));
+
       show_status(&stat);
       break;
     case 'b': // is moving?
@@ -213,7 +245,6 @@ int main(int argc, char *argv[])
       
       struct motor_message busy;
       read(serverfd,&busy,sizeof(struct motor_message));
-      write(serverfd,&closeready,sizeof(closeready));
       	if(busy.status == MOTOR_IS_RUNNING){
       		printf("1\n");
       		return(1);
