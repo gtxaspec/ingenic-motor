@@ -16,7 +16,6 @@
 #include <syslog.h>
 #include <signal.h>
 
-
 #define SV_SOCK_PATH "/dev/md"
 #define BUF_SIZE 15
 
@@ -35,6 +34,8 @@ struct request{
     int got_x;
     int y;
     int got_y;
+    int speed;  // Add speed to the request structure
+    bool speed_supplied; // Track if speed was supplied
 };
 
 struct motor_message
@@ -128,16 +129,24 @@ int check_daemon(char *file_name)
     return 0;
 }
 
+void print_request_message(struct request *req)
+{
+    printf("Sent message: command=%c, type=%c, x=%d, y=%d, speed=%d, speed_supplied=%d\n",
+           req->command, req->type, req->x, req->y, req->speed, req->speed_supplied);
+}
 
 int main(int argc, char *argv[])
 {
-  char direction = 's';
+  char direction = '\0';
   int stepspeed = 900;
   int c;
   char *daemon_pid_file;
   struct request request_message;
+  bool verbose = false; // Initialize verbose to false
+
   request_message.got_x = 0;
   request_message.got_y = 0;
+  request_message.speed_supplied = false; // Initialize speed_supplied to false
 
   //openlog ("motors app", LOG_PID, LOG_USER);
   daemon_pid_file = "/var/run/motors-daemon";
@@ -148,12 +157,11 @@ int main(int argc, char *argv[])
   //should open socket here
   struct sockaddr_un addr;
 
- 
   int serverfd = socket(AF_UNIX, SOCK_STREAM, 0);
 
   if (serverfd == -1) {
       exit(EXIT_FAILURE);
-    }
+  }
   memset(&addr, 0, sizeof(struct sockaddr_un));
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, SV_SOCK_PATH, sizeof(addr.sun_path) - 1);
@@ -162,9 +170,6 @@ int main(int argc, char *argv[])
   if (connect(serverfd, (struct sockaddr *) &addr,sizeof(struct sockaddr_un)) == -1)
       exit(EXIT_FAILURE);
   
-
-  
- 
   while ((c = getopt(argc, argv, "d:s:x:y:jipSrvb")) != -1)
   {
     switch (c)
@@ -174,16 +179,17 @@ int main(int argc, char *argv[])
       direction = optarg[0];
       break;
     case 's':
-      request_message.command = 's';
       if (atoi(optarg) > 900)
       {
-        request_message.x = 900;
+        stepspeed = 900;
       }
       else
       {
-        request_message.x = atoi(optarg);
+        stepspeed = atoi(optarg);
       }
-      write(serverfd,&request_message,sizeof(struct request));
+      request_message.speed = stepspeed;
+      request_message.speed_supplied = true; // Set speed_supplied to true when speed is provided
+      request_message.command = 's';
       break;
     case 'x':
       request_message.x = atoi(optarg);
@@ -195,65 +201,66 @@ int main(int argc, char *argv[])
       break;
     case 'j':
       request_message.command = 'j';
+      if (verbose) print_request_message(&request_message);
       write(serverfd,&request_message,sizeof(struct request));
 
       struct motor_message status;
       read(serverfd,&status,sizeof(struct motor_message));
 
- 	    JSON_status(&status);
-      break;
+      JSON_status(&status);
+      return 0;
     case 'i':
       // get all initial values
       request_message.command = 'i';
+      if (verbose) print_request_message(&request_message);
       write(serverfd,&request_message,sizeof(struct request));
       
       struct motor_message initial;
       read(serverfd,&initial,sizeof(struct motor_message));
 
-
       JSON_initial(&initial);
-      break;
+      return 0;
     case 'p':
       request_message.command = 'p';
+      if (verbose) print_request_message(&request_message);
       write(serverfd,&request_message,sizeof(struct request));
       
       struct motor_message pos;
       read(serverfd,&pos,sizeof(struct motor_message));
 
       xy_pos(&pos);
-      break;
+      return 0;
     case 'v':
-      //not printing any debug on the app yet,daemon prints on logread
-      //debugflag = true;
+      verbose = true; // Enable verbose mode
       break;
     case 'r': // reset
       request_message.command = 'r';
       break;
     case 'S': // status
       request_message.command = 'S';
+      if (verbose) print_request_message(&request_message);
       write(serverfd,&request_message,sizeof(struct request));
       
       struct motor_message stat;
       read(serverfd,&stat,sizeof(struct motor_message));
 
-
       show_status(&stat);
-      break;
+      return 0;
     case 'b': // is moving?
       request_message.command = 'b';
+      if (verbose) print_request_message(&request_message);
       write(serverfd,&request_message,sizeof(struct request));
       
       struct motor_message busy;
       read(serverfd,&busy,sizeof(struct motor_message));
-      	if(busy.status == MOTOR_IS_RUNNING){
-      		printf("1\n");
-      		return(1);
-      	}
-      	else{
-      		printf("0\n");
-      		return(0);
-      	}
-      break;
+        if(busy.status == MOTOR_IS_RUNNING){
+          printf("1\n");
+          return(1);
+        }
+        else{
+          printf("0\n");
+          return(0);
+        }
     default:
       printf("Invalid Argument %c\n", c);
       printf("Usage : %s\n"
@@ -273,31 +280,40 @@ int main(int argc, char *argv[])
     }
   }
 
+  // If the command is speed only, send it and return
+  if (request_message.command == 's') {
+    if (verbose) print_request_message(&request_message);
+    write(serverfd,&request_message,sizeof(struct request));
+    return 0;
+  }
+
+  // Ensure the final request uses the correct speed if supplied
+  if (request_message.speed_supplied) {
+    request_message.speed = stepspeed;
+  } else {
+    request_message.speed = 0;  // Indicate that speed is not set
+  }
+
   switch (direction)
   {
   case 's': // stop
-  	request_message.type = 's';
-  	write(serverfd,&request_message,sizeof(struct request));
+    request_message.type = 's';
     break;
 
   case 'c': // cruise
-  	request_message.type = 'c';
-  	write(serverfd,&request_message,sizeof(struct request));
+    request_message.type = 'c';
     break;
 
   case 'b': // go back
-  	request_message.type = 'b';
-  	write(serverfd,&request_message,sizeof(struct request));
+    request_message.type = 'b';
     break;
 
   case 'h': // set position (absolute movement)
-  	request_message.type = 'h';
-  	write(serverfd,&request_message,sizeof(struct request));
+    request_message.type = 'h';
     break;
 
   case 'g': // move x y (relative movement)
     request_message.type = 'g';
-    write(serverfd,&request_message,sizeof(struct request));
     break;
 
   default:
@@ -311,6 +327,11 @@ int main(int argc, char *argv[])
            argv[0]);
     exit(EXIT_FAILURE);
   }
+
+  // Print and send the final request message
+  request_message.command = 'd';
+  if (verbose) print_request_message(&request_message);
+  write(serverfd,&request_message,sizeof(struct request));
 
   return 0;
 }

@@ -13,8 +13,6 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-
-
 #define SV_SOCK_PATH "/dev/md"
 #define MAX_CONN 5
 #define MOTOR_MOVE_STOP 0x0
@@ -40,7 +38,6 @@
 
 #define PID_SIZE 32
 
-
 enum motor_status
 {
   MOTOR_IS_STOP,
@@ -54,9 +51,8 @@ struct request{
     int got_x;
     int y;
     int got_y;
+    int speed;  // Add speed to the request structure
 };
-
-
 
 struct motor_status_st
 {
@@ -95,10 +91,9 @@ struct motor_reset_data
   unsigned int y_cur_step;
 };
 
-
-
 int motorfd = -1;
 struct request request_message; // object for IPC request from client
+int last_known_speed = 900; // Default speed
 
 void motor_ioctl(int cmd, void *arg)
 {
@@ -127,6 +122,7 @@ int motor_is_busy()
   motor_status_get(&msg);
   return msg.status == MOTOR_IS_RUNNING ? 1 : 0;
 }
+
 void motor_steps(int xsteps, int ysteps, int stepspeed)
 {
   struct motors_steps steps;
@@ -261,9 +257,8 @@ void requestcleanup(){
     request_message.got_x = 0;
     request_message.y = 0;
     request_message.got_y = 0;
+    request_message.speed = 0;  // Reset speed in request
 }
-
-
 
 int main(int argc, char *argv[])
 {   
@@ -297,7 +292,6 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
     int daemonstop = 0;
-    int stepspeed =900; //TODO move this value to a struct
     int closeready = 0;
     //struct instances
     struct sockaddr_un addr; //socket struct
@@ -311,7 +305,6 @@ int main(int argc, char *argv[])
     syslog(LOG_DEBUG,"== Reset position, please wait");
     memset(&motor_reset_data, 0, sizeof(motor_reset_data));
     ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
-
 
     int serverfd = socket(AF_UNIX, SOCK_STREAM, 0);
     syslog(LOG_DEBUG,"Server socket fd = %d", serverfd);
@@ -347,7 +340,6 @@ int main(int argc, char *argv[])
 
     syslog (LOG_INFO, "motors-daemon started");
 
-
     while (daemonstop == 0)
     {   
         //make request object go back to initial value
@@ -372,12 +364,20 @@ int main(int argc, char *argv[])
         }
         else{
             syslog (LOG_DEBUG, "request command is %c",request_message.command);
+
+            if (request_message.speed != 0) {
+                last_known_speed = request_message.speed;
+                syslog(LOG_DEBUG, "Updating last known speed to %d", last_known_speed);
+            } else {
+                syslog(LOG_DEBUG, "Using last known speed %d", last_known_speed);
+            }
+
             switch(request_message.command){
                 case 'd': // move direction
                     syslog (LOG_DEBUG, "request type is %c",request_message.type);
                     switch(request_message.type){
                     case 'g': //relative movement
-                        motor_steps(request_message.x, request_message.y, stepspeed);
+                        motor_steps(request_message.x, request_message.y, last_known_speed);
                         syslog (LOG_DEBUG, "request x is %i",request_message.x);
                         syslog (LOG_DEBUG, "request y is %i",request_message.y);
                         break;
@@ -387,7 +387,7 @@ int main(int argc, char *argv[])
                               request_message.x = motor_message.x; //as we are rewriting initial between requests this should not be necessary but leaving as is as to not break anything
                             if (request_message.got_y == 0)
                               request_message.y = motor_message.y;
-                            motor_set_position(request_message.x, request_message.y, stepspeed);
+                            motor_set_position(request_message.x, request_message.y, last_known_speed);
                             syslog (LOG_DEBUG, "request x is %i",request_message.x);
                             syslog (LOG_DEBUG, "request y is %i",request_message.y);
                         break;
@@ -434,17 +434,17 @@ int main(int argc, char *argv[])
 
                 break;
                 case 's': //set speed
-                if (request_message.x > 900){
-                    stepspeed = 900;
-                  }
-                else{
-                    stepspeed = request_message.x; //if command is s, we use the x variable so we dont define a new variable inside struct so object size is smaller
-                  }
-
+                    if (request_message.speed > 900){
+                        last_known_speed = 900;
+                    }
+                    else{
+                        last_known_speed = request_message.speed;
+                    }
+                    syslog(LOG_DEBUG, "Set speed command, last known speed now %d", last_known_speed);
                 break;
                 case 'S': //show status
-                motor_status_get(&motor_message);
-                write(clientfd,&motor_message,sizeof(struct motor_message));
+                    motor_status_get(&motor_message);
+                    write(clientfd,&motor_message,sizeof(struct motor_message));
 
                 break;
             }
