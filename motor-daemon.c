@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <stdbool.h>
 
 #define SV_SOCK_PATH "/dev/md"
 #define MAX_CONN 5
@@ -264,17 +265,22 @@ int main(int argc, char *argv[])
 {   
     int c;
     char *pid_file;
+    bool skip_reset = false; // Initialize skip_reset to false
     pid_file = "/var/run/motors-daemon";
     setlogmask(LOG_MASK(LOG_INFO));
-    while ((c = getopt(argc, argv, "dh")) != -1){
+    while ((c = getopt(argc, argv, "dhp")) != -1){
         switch(c){
             case 'd':
             setlogmask(LOG_MASK(LOG_DEBUG)|LOG_MASK(LOG_INFO)); 
+            break;
+            case 'p':
+            skip_reset = true; // Set skip_reset to true if -p is provided
             break;
             default:
                 printf("Usage : \n"
                        "\t -d enable debugging messages to syslog\n"
                        "\t -h print this help message\n"
+                       "\t -p skip reset position on launch\n"
                        "\t No option to start the daemon\n");
             return EXIT_FAILURE;
             break;
@@ -298,13 +304,15 @@ int main(int argc, char *argv[])
     struct motor_reset_data motor_reset_data;
     struct motor_message motor_message;
 
-    //acquire control of motor device and perform a reset
+    //acquire control of motor device
     motorfd = open("/dev/motor", 0);
 
-    //reset motor as setup
-    syslog(LOG_DEBUG,"== Reset position, please wait");
-    memset(&motor_reset_data, 0, sizeof(motor_reset_data));
-    ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
+    //reset motor as setup if not skipping reset
+    if (!skip_reset) {
+        syslog(LOG_DEBUG,"== Reset position, please wait");
+        memset(&motor_reset_data, 0, sizeof(motor_reset_data));
+        ioctl(motorfd, MOTOR_RESET, &motor_reset_data);
+    }
 
     int serverfd = socket(AF_UNIX, SOCK_STREAM, 0);
     syslog(LOG_DEBUG,"Server socket fd = %d", serverfd);
