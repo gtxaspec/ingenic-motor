@@ -334,7 +334,7 @@ int main(int argc, char *argv[])
       printf("Usage : %s -d\n"
              "\t s (Stop)\n"
              "\t c (Cruise)\n"
-             "\t b (Go to previous position)\n"
+             "\t b (Go to home position)\n"
              "\t h (Set position X and Y)\n"
              "\t g (Steps X and Y)\n",
              argv[0]);
