@@ -27,7 +27,7 @@ enum motor_status
   MOTOR_IS_RUNNING,
 };
 
-struct request {
+struct request{
     char command; // d,r,s,p,b,S,i,j (move, reset,set speed,get position, is busy,Status,initial,JSON)
     char type;   // g,h,c,s (absolute,relative,cruise,stop)
     int x;
@@ -135,6 +135,18 @@ void print_request_message(struct request *req)
            req->command, req->type, req->x, req->y, req->speed, req->speed_supplied);
 }
 
+void initialize_request_message(struct request *req) {
+    memset(req, 0, sizeof(struct request));
+    req->command = 'd'; // Default command
+    req->type = 's'; // Default type
+    req->x = 0;
+    req->got_x = 0;
+    req->y = 0;
+    req->got_y = 0;
+    req->speed = 0;
+    req->speed_supplied = false;
+}
+
 int main(int argc, char *argv[])
 {
   char direction = '\0';
@@ -144,9 +156,7 @@ int main(int argc, char *argv[])
   struct request request_message;
   bool verbose = false; // Initialize verbose to false
 
-  request_message.got_x = 0;
-  request_message.got_y = 0;
-  request_message.speed_supplied = false; // Initialize speed_supplied to false
+  initialize_request_message(&request_message);
 
   //openlog ("motors app", LOG_PID, LOG_USER);
   daemon_pid_file = "/var/run/motors-daemon";
@@ -235,7 +245,9 @@ int main(int argc, char *argv[])
       break;
     case 'r': // reset
       request_message.command = 'r';
-      break;
+      if (verbose) print_request_message(&request_message);
+      write(serverfd,&request_message,sizeof(struct request));
+      return 0;
     case 'S': // status
       request_message.command = 'S';
       if (verbose) print_request_message(&request_message);
@@ -294,7 +306,6 @@ int main(int argc, char *argv[])
     request_message.speed = 0;  // Indicate that speed is not set
   }
 
-  // Only check direction for commands that need it
   if (request_message.command == 'd') {
     switch (direction)
     {
@@ -331,9 +342,11 @@ int main(int argc, char *argv[])
     }
   }
 
-  // Print and send the final request message
-  if (verbose) print_request_message(&request_message);
-  write(serverfd,&request_message,sizeof(struct request));
+  // Print and send the final request message if it's a move command
+  if (request_message.command == 'd') {
+    if (verbose) print_request_message(&request_message);
+    write(serverfd,&request_message,sizeof(struct request));
+  }
 
   return 0;
 }
