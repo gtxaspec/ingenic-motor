@@ -27,7 +27,7 @@ enum motor_status
   MOTOR_IS_RUNNING,
 };
 
-struct request{
+struct request {
     char command; // d,r,s,p,b,S,i,j (move, reset,set speed,get position, is busy,Status,initial,JSON)
     char type;   // g,h,c,s (absolute,relative,cruise,stop)
     int x;
@@ -294,42 +294,44 @@ int main(int argc, char *argv[])
     request_message.speed = 0;  // Indicate that speed is not set
   }
 
-  switch (direction)
-  {
-  case 's': // stop
-    request_message.type = 's';
-    break;
+  // Only check direction for commands that need it
+  if (request_message.command == 'd') {
+    switch (direction)
+    {
+    case 's': // stop
+      request_message.type = 's';
+      break;
 
-  case 'c': // cruise
-    request_message.type = 'c';
-    break;
+    case 'c': // cruise
+      request_message.type = 'c';
+      break;
 
-  case 'b': // go back
-    request_message.type = 'b';
-    break;
+    case 'b': // go back
+      request_message.type = 'b';
+      break;
 
-  case 'h': // set position (absolute movement)
-    request_message.type = 'h';
-    break;
+    case 'h': // set position (absolute movement)
+      request_message.type = 'h';
+      break;
 
-  case 'g': // move x y (relative movement)
-    request_message.type = 'g';
-    break;
+    case 'g': // move x y (relative movement)
+      request_message.type = 'g';
+      break;
 
-  default:
-    printf("Invalid Direction Argument %c\n", direction);
-    printf("Usage : %s -d\n"
-           "\t s (Stop)\n"
-           "\t c (Cruise)\n"
-           "\t b (Go to previous position)\n"
-           "\t h (Set position X and Y)\n"
-           "\t g (Steps X and Y)\n",
-           argv[0]);
-    exit(EXIT_FAILURE);
+    default:
+      printf("Invalid Direction Argument %c\n", direction);
+      printf("Usage : %s -d\n"
+             "\t s (Stop)\n"
+             "\t c (Cruise)\n"
+             "\t b (Go to previous position)\n"
+             "\t h (Set position X and Y)\n"
+             "\t g (Steps X and Y)\n",
+             argv[0]);
+      exit(EXIT_FAILURE);
+    }
   }
 
   // Print and send the final request message
-  request_message.command = 'd';
   if (verbose) print_request_message(&request_message);
   write(serverfd,&request_message,sizeof(struct request));
 
