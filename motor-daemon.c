@@ -76,6 +76,7 @@ struct motor_message
   /* these two members are not standard from the original kernel module */
   unsigned int x_max_steps;
   unsigned int y_max_steps;
+  bool motor_inverted;
 };
 
 struct motors_steps
@@ -95,6 +96,7 @@ struct motor_reset_data
 int motorfd = -1;
 struct request request_message; // object for IPC request from client
 int last_known_speed = 900; // Default speed
+bool motor_inverted = false; // Global flag for motor inversion
 
 void motor_ioctl(int cmd, void *arg)
 {
@@ -124,11 +126,11 @@ int motor_is_busy()
   return msg.status == MOTOR_IS_RUNNING ? 1 : 0;
 }
 
-void motor_steps(int xsteps, int ysteps, int stepspeed)
-{
+void motor_steps(int xsteps, int ysteps, int stepspeed) {
   struct motors_steps steps;
-  steps.x = xsteps;
-  steps.y = ysteps;
+
+  steps.x = motor_inverted ? -xsteps : xsteps;
+  steps.y = motor_inverted ? -ysteps : ysteps;
 
   syslog(LOG_DEBUG,"Starting relative move");
   syslog(LOG_DEBUG," -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
@@ -137,13 +139,17 @@ void motor_steps(int xsteps, int ysteps, int stepspeed)
   syslog(LOG_DEBUG,"Finished setting relative move");
 }
 
-void motor_set_position(int xpos, int ypos, int stepspeed)
-{
+void motor_set_position(int xpos, int ypos, int stepspeed) {
   struct motor_message msg;
   motor_status_get(&msg);
 
   int deltax = xpos - msg.x;
   int deltay = ypos - msg.y;
+
+  if (motor_inverted) {
+      deltax = -deltax;
+      deltay = -deltay;
+  }
 
   syslog(LOG_DEBUG,"Starting absolute move");
   syslog(LOG_DEBUG," -> set position current X: %d, Y: %d, steps required X: %d, Y: %d, speed %d\n", msg.x, msg.y, deltax, deltay, stepspeed);
@@ -267,11 +273,11 @@ int main(int argc, char *argv[])
     char *pid_file;
     bool skip_reset = false; // Initialize skip_reset to false
     pid_file = "/var/run/motors-daemon";
-    setlogmask(LOG_MASK(LOG_INFO));
+    //setlogmask(LOG_UPTO(LOG_DEBUG));
     while ((c = getopt(argc, argv, "dhp")) != -1){
         switch(c){
             case 'd':
-            setlogmask(LOG_MASK(LOG_DEBUG)|LOG_MASK(LOG_INFO)); 
+           // setlogmask(LOG_UPTO(LOG_DEBUG));
             break;
             case 'p':
             skip_reset = true; // Set skip_reset to true if -p is provided
@@ -450,10 +456,15 @@ int main(int argc, char *argv[])
                     }
                     syslog(LOG_DEBUG, "Set speed command, last known speed now %d", last_known_speed);
                 break;
+                case 'I': // Invert motor
+                    motor_inverted = !motor_inverted; // Toggle the state
+                    syslog(LOG_DEBUG, "Motor inversion set to %s", motor_inverted ? "ON" : "OFF");
+                break;
                 case 'S': //show status
                     motor_status_get(&motor_message);
+                    motor_message.motor_inverted = motor_inverted;
                     write(clientfd,&motor_message,sizeof(struct motor_message));
-
+                    syslog(LOG_DEBUG, "Sent motor status");
                 break;
             }
 

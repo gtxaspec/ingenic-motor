@@ -47,6 +47,7 @@ struct motor_message
   /* these two members are not standard from the original kernel module */
   unsigned int x_max_steps;
   unsigned int y_max_steps;
+  bool motor_inverted;
 };
 
 void JSON_initial(struct motor_message *message)
@@ -100,6 +101,7 @@ void show_status(struct motor_message *message)
   printf("X Steps %d.\n", (*message).x);
   printf("Y Steps %d.\n",(*message).y);
   printf("Speed %d.\n", (*message).speed);
+  printf("Motor Inversion: %s\n", message->motor_inverted ? "ON" : "OFF");
 }
 
 int check_daemon(char *file_name)
@@ -180,7 +182,7 @@ int main(int argc, char *argv[])
   if (connect(serverfd, (struct sockaddr *) &addr,sizeof(struct sockaddr_un)) == -1)
       exit(EXIT_FAILURE);
   
-  while ((c = getopt(argc, argv, "d:s:x:y:jipSrvb")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:jipSrvbI")) != -1)
   {
     switch (c)
     {
@@ -258,6 +260,11 @@ int main(int argc, char *argv[])
 
       show_status(&stat);
       return 0;
+    case 'I': // Invert motor
+      request_message.command = 'I'; // Send the invert command
+      if (verbose) print_request_message(&request_message);
+      write(serverfd,&request_message,sizeof(struct request));
+      return 0;
     case 'b': // is moving?
       request_message.command = 'b';
       if (verbose) print_request_message(&request_message);
@@ -286,7 +293,8 @@ int main(int argc, char *argv[])
              "\t -i return json string for all camera parameters\n"
              "\t -p return xpos,ypos as a string\n"
              "\t -b prints 1 if motor is (b)usy moving or 0 if is not\n"
-             "\t -S show status\n",
+             "\t -S show status\n"
+             "\t -I Invert motor direction\n",
              argv[0]);
       exit(EXIT_FAILURE);
     }
