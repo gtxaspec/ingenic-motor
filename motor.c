@@ -21,6 +21,10 @@
 
 #define PID_SIZE 32
 
+#define MOTOR_INVERT_X 0x1
+#define MOTOR_INVERT_Y 0x2
+#define MOTOR_INVERT_BOTH 0x3
+
 enum motor_status
 {
   MOTOR_IS_STOP,
@@ -47,7 +51,7 @@ struct motor_message
   /* these two members are not standard from the original kernel module */
   unsigned int x_max_steps;
   unsigned int y_max_steps;
-  bool motor_inverted;
+  unsigned int inversion_state; // Report the inversion state
 };
 
 void JSON_initial(struct motor_message *message)
@@ -67,6 +71,8 @@ void JSON_initial(struct motor_message *message)
   printf("\"ymax\":\"%d\"", (*message).y_max_steps);
   printf(",");
   printf("\"speed\":\"%d\"", (*message).speed);
+  printf(",");
+  printf("\"invert\":\"%d\"", (*message).inversion_state);
   printf("}");
   printf("\n");
 }
@@ -84,6 +90,8 @@ void JSON_status(struct motor_message *message)
   printf("\"ypos\":\"%d\"", (*message).y);
   printf(",");
   printf("\"speed\":\"%d\"", (*message).speed);
+  printf(",");
+  printf("\"invert\":\"%d\"", (*message).inversion_state);
   printf("}");
   printf("\n");
 }
@@ -101,7 +109,17 @@ void show_status(struct motor_message *message)
   printf("X Steps %d.\n", (*message).x);
   printf("Y Steps %d.\n",(*message).y);
   printf("Speed %d.\n", (*message).speed);
-  printf("Motor Inversion: %s\n", message->motor_inverted ? "ON" : "OFF");
+
+  // Report motor inversion status
+  if (message->inversion_state == MOTOR_INVERT_BOTH) {
+      printf("Motor Inversion: BOTH X and Y are inverted\n");
+  } else if (message->inversion_state == MOTOR_INVERT_X) {
+      printf("Motor Inversion: X axis is inverted\n");
+  } else if (message->inversion_state == MOTOR_INVERT_Y) {
+      printf("Motor Inversion: Y axis is inverted\n");
+  } else {
+      printf("Motor Inversion: OFF\n");
+  }
 }
 
 int check_daemon(char *file_name)
@@ -182,7 +200,7 @@ int main(int argc, char *argv[])
   if (connect(serverfd, (struct sockaddr *) &addr,sizeof(struct sockaddr_un)) == -1)
       exit(EXIT_FAILURE);
   
-  while ((c = getopt(argc, argv, "d:s:x:y:jipSrvbI")) != -1)
+  while ((c = getopt(argc, argv, "d:s:x:y:jipSrvbI:")) != -1)
   {
     switch (c)
     {
@@ -261,7 +279,22 @@ int main(int argc, char *argv[])
       show_status(&stat);
       return 0;
     case 'I': // Invert motor
-      request_message.command = 'I'; // Send the invert command
+      request_message.command = 'I';
+      if (optarg) {
+          if (strcmp(optarg, "x") == 0) {
+              request_message.type = 'x'; // Invert X
+          } else if (strcmp(optarg, "y") == 0) {
+              request_message.type = 'y'; // Invert Y
+          } else if (strcmp(optarg, "b") == 0) {
+              request_message.type = 'b'; // Invert both
+          } else {
+              printf("Invalid option for -I: %s\n", optarg);
+              exit(EXIT_FAILURE);
+          }
+      } else {
+          request_message.type = 'b'; // Default to inverting both axes
+      }
+
       if (verbose) print_request_message(&request_message);
       write(serverfd,&request_message,sizeof(struct request));
       return 0;
@@ -294,7 +327,7 @@ int main(int argc, char *argv[])
              "\t -p return xpos,ypos as a string\n"
              "\t -b prints 1 if motor is (b)usy moving or 0 if is not\n"
              "\t -S show status\n"
-             "\t -I Invert motor direction\n",
+             "\t -I Invert motor direction with 'x', 'y', or 'b' for both axes\n",
              argv[0]);
       exit(EXIT_FAILURE);
     }

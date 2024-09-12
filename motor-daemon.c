@@ -45,6 +45,15 @@ enum motor_status
   MOTOR_IS_RUNNING,
 };
 
+enum motor_inversion {
+    MOTOR_NO_INVERSION = 0x0,      // No inversion
+    MOTOR_INVERT_X = 0x1,          // Invert X only
+    MOTOR_INVERT_Y = 0x2,          // Invert Y only
+    MOTOR_INVERT_BOTH = 0x3        // Invert both X and Y
+};
+
+enum motor_inversion motor_inversion_state = MOTOR_NO_INVERSION;  // Default is no inversion
+
 struct request{
     char command; // d,r,s,p,b,S,i,j (move, reset,set speed,get position, is busy,Status,initial,JSON)
     char type;   // g,h,c,s (absolute,relative,cruise,stop)
@@ -76,7 +85,7 @@ struct motor_message
   /* these two members are not standard from the original kernel module */
   unsigned int x_max_steps;
   unsigned int y_max_steps;
-  bool motor_inverted;
+  unsigned int inversion_state; // Report the inversion state
 };
 
 struct motors_steps
@@ -129,8 +138,9 @@ int motor_is_busy()
 void motor_steps(int xsteps, int ysteps, int stepspeed) {
   struct motors_steps steps;
 
-  steps.x = motor_inverted ? -xsteps : xsteps;
-  steps.y = motor_inverted ? -ysteps : ysteps;
+  // Apply the correct inversion based on the motor_inversion_state
+  steps.x = (motor_inversion_state & MOTOR_INVERT_X) ? -xsteps : xsteps;
+  steps.y = (motor_inversion_state & MOTOR_INVERT_Y) ? -ysteps : ysteps;
 
   syslog(LOG_DEBUG,"Starting relative move");
   syslog(LOG_DEBUG," -> steps, X %d, Y %d, speed %d\n", steps.x, steps.y, stepspeed);
@@ -146,8 +156,11 @@ void motor_set_position(int xpos, int ypos, int stepspeed) {
   int deltax = xpos - msg.x;
   int deltay = ypos - msg.y;
 
-  if (motor_inverted) {
+  // Apply inversion to deltas based on the inversion state
+  if (motor_inversion_state & MOTOR_INVERT_X) {
       deltax = -deltax;
+  }
+  if (motor_inversion_state & MOTOR_INVERT_Y) {
       deltay = -deltay;
   }
 
@@ -456,13 +469,28 @@ int main(int argc, char *argv[])
                     }
                     syslog(LOG_DEBUG, "Set speed command, last known speed now %d", last_known_speed);
                 break;
-                case 'I': // Invert motor
-                    motor_inverted = !motor_inverted; // Toggle the state
-                    syslog(LOG_DEBUG, "Motor inversion set to %s", motor_inverted ? "ON" : "OFF");
+                case 'I': // Invert motor direction
+                    switch (request_message.type) {
+                        case 'x': // Invert X only
+                            motor_inversion_state ^= MOTOR_INVERT_X;
+                            syslog(LOG_DEBUG, "Motor inversion X set to %s", (motor_inversion_state & MOTOR_INVERT_X) ? "ON" : "OFF");
+                            break;
+                        case 'y': // Invert Y only
+                            motor_inversion_state ^= MOTOR_INVERT_Y;
+                            syslog(LOG_DEBUG, "Motor inversion Y set to %s", (motor_inversion_state & MOTOR_INVERT_Y) ? "ON" : "OFF");
+                            break;
+                        case 'b': // Invert both X and Y
+                            motor_inversion_state ^= MOTOR_INVERT_BOTH;
+                            syslog(LOG_DEBUG, "Motor inversion set to %s", (motor_inversion_state == MOTOR_INVERT_BOTH) ? "BOTH ON" : "BOTH OFF");
+                            break;
+                        default:
+                            syslog(LOG_DEBUG, "Invalid inversion command type.");
+                            break;
+                    }
                 break;
                 case 'S': //show status
                     motor_status_get(&motor_message);
-                    motor_message.motor_inverted = motor_inverted;
+                    motor_message.inversion_state = motor_inversion_state;
                     write(clientfd,&motor_message,sizeof(struct motor_message));
                     syslog(LOG_DEBUG, "Sent motor status");
                 break;
