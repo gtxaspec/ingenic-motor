@@ -209,14 +209,7 @@ int main(int argc, char *argv[])
       direction = optarg[0];
       break;
     case 's':
-      if (atoi(optarg) > 900)
-      {
-        stepspeed = 900;
-      }
-      else
-      {
-        stepspeed = atoi(optarg);
-      }
+      stepspeed = atoi(optarg);
       request_message.speed = stepspeed;
       request_message.speed_supplied = true; // Set speed_supplied to true when speed is provided
       request_message.command = 's';

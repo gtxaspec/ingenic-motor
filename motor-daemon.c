@@ -25,8 +25,8 @@
 #define MOTOR_DIRECTIONAL_LEFT 0x2
 #define MOTOR_DIRECTIONAL_RIGHT 0x3
 
-#define MOTOR1_MAX_SPEED 1000
-#define MOTOR1_MIN_SPEED 10
+#define MOTOR1_MAX_SPEED 2000
+#define MOTOR1_MIN_SPEED 1
 
 /* ioctl cmd */
 #define MOTOR_STOP 0x1
@@ -461,12 +461,7 @@ int main(int argc, char *argv[])
 
                 break;
                 case 's': //set speed
-                    if (request_message.speed > 900){
-                        last_known_speed = 900;
-                    }
-                    else{
-                        last_known_speed = request_message.speed;
-                    }
+                    last_known_speed = request_message.speed; // Don't limit the speed
                     motor_ioctl(MOTOR_SPEED, &last_known_speed);
                     syslog(LOG_DEBUG, "Set speed command, last known speed now %d", last_known_speed);
                 break;
