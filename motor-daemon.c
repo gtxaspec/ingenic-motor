@@ -467,6 +467,7 @@ int main(int argc, char *argv[])
                     else{
                         last_known_speed = request_message.speed;
                     }
+                    motor_ioctl(MOTOR_SPEED, &last_known_speed);
                     syslog(LOG_DEBUG, "Set speed command, last known speed now %d", last_known_speed);
                 break;
                 case 'I': // Invert motor direction
